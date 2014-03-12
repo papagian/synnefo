@@ -16,6 +16,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import django.utils.simplejson as json
+
 from pithos.api.test import PithosAPITest
 from pithos.api.test.util import get_random_data, get_random_name
 
@@ -191,14 +193,14 @@ class TestPermissions(PithosAPITest):
     def test_read_directory(self):
         url = join_urls(
             self.pithos_path, self.user, self.container, self.object)
-        for type in ('application/directory', 'application/folder'):
+        for type_ in ('application/directory', 'application/folder'):
             # change content type
-            r = self.put(url, data='', content_type=type,
+            r = self.put(url, data='', content_type=type_,
                          HTTP_X_MOVE_FROM='/%s/%s' % (
                              self.container, self.object))
             self.assertEqual(r.status_code, 201)
             info = self.get_object_info(self.container, self.object)
-            self.assertEqual(info['Content-Type'], type)
+            self.assertEqual(info['Content-Type'], type_)
 
             url = join_urls(
                 self.pithos_path, self.user, self.container, self.object)

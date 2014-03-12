@@ -204,9 +204,7 @@ class ObjectGet(PithosAPITest):
         o = self.objects[c][0]
         url = join_urls(self.pithos_path, self.user, c, o)
 
-        meta = {'HTTP_X_OBJECT_META_QUALITY': 'AAA'}
-        r = self.post(url, content_type='', **meta)
-        self.assertEqual(r.status_code, 202)
+        self.upload_object(c, o, quality='aaa')
 
         url = join_urls(self.pithos_path, self.user, c, o)
         r = self.get('%s?version=list&format=json' % url)
@@ -220,16 +218,17 @@ class ObjectGet(PithosAPITest):
         r = self.post(url, content_type='', **meta)
         self.assertEqual(r.status_code, 202)
 
-        # assert a newly created version has been created
+        # assert no new version has been created
         r = self.get('%s?version=list&format=json' % url)
         self.assertEqual(r.status_code, 200)
         l2 = json.loads(r.content)['versions']
-        self.assertEqual(len(l2), len(l1) + 1)
-        self.assertEqual(l2[:-1], l1)
+        self.assertEqual(len(l2), len(l1))
 
         vserial, _ = l2[-2]
+        self.assertEqual(self.get_object_meta(c, o, version=vserial), {})
+        vserial, _ = l2[-1]
         self.assertEqual(self.get_object_meta(c, o, version=vserial),
-                         {'Quality': 'AAA'})
+                         {'Quality': 'AB', 'Stock': 'True'})
 
         # update data
         self.append_object_data(c, o)
@@ -245,11 +244,9 @@ class ObjectGet(PithosAPITest):
         c = 'c1'
         o = self.objects[c][0]
         url = join_urls(self.pithos_path, self.user, c, o)
+        data = self.get(url).content
 
-        # Update metadata
-        meta = {'HTTP_X_OBJECT_META_QUALITY': 'AAA'}
-        r = self.post(url, content_type='', **meta)
-        self.assertEqual(r.status_code, 202)
+        updated_data = self.upload_object(c, o, quality='aaa')[1]
 
         url = join_urls(self.pithos_path, self.user, c, o)
         r = self.get('%s?version=list&format=json' % url)
@@ -260,10 +257,16 @@ class ObjectGet(PithosAPITest):
         r = self.head('%s?version=%s' % (url, l[0][0]))
         self.assertEqual(r.status_code, 200)
         self.assertTrue('X-Object-Meta-Quality' not in r)
+        r = self.get('%s?version=%s' % (url, l[0][0]))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.content, data)
 
         r = self.head('%s?version=%s' % (url, l[1][0]))
         self.assertEqual(r.status_code, 200)
         self.assertTrue('X-Object-Meta-Quality' in r)
+        r = self.get('%s?version=%s' % (url, l[1][0]))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.content, updated_data)
 
         # test invalid version
         r = self.head('%s?version=-1' % url)
@@ -779,8 +782,7 @@ class ObjectPut(PithosAPITest):
             data += self.upload_object(cname, oname=part)[1]
 
         manifest = '%s/%s' % (cname, prefix)
-        oname = get_random_name()
-        url = join_urls(self.pithos_path, self.user, cname, oname)
+        url = join_urls(self.pithos_path, self.user, cname, manifest)
         r = self.put(url, data='', HTTP_X_OBJECT_MANIFEST=manifest)
         self.assertEqual(r.status_code, 201)
 
@@ -793,7 +795,9 @@ class ObjectPut(PithosAPITest):
 
         # invalid manifestation
         invalid_manifestation = '%s/%s' % (cname, get_random_name())
-        self.put(url, data='', HTTP_X_OBJECT_MANIFEST=invalid_manifestation)
+        r = self.put(url, data='',
+                     HTTP_X_OBJECT_MANIFEST=invalid_manifestation)
+        self.assertEqual(r.status_code, 201)
         r = self.get(url)
         self.assertEqual(r.content, '')
 
@@ -922,6 +926,8 @@ class ObjectPutCopy(PithosAPITest):
             self.assertEqual(r.status_code, 201)
 
             # assert access the new object
+            url = join_urls(self.pithos_path, self.user, self.container,
+                            oname)
             r = self.head(url)
             self.assertEqual(r.status_code, 200)
             self.assertTrue('X-Object-Meta-Test' in r)
@@ -1266,7 +1272,8 @@ class ObjectCopy(PithosAPITest):
         PithosAPITest.setUp(self)
         self.container = 'c1'
         self.create_container(self.container)
-        self.object, self.data = self.upload_object(self.container)[:-1]
+        self.object, self.data = self.upload_object(self.container,
+                                                    foo='bar')[:-1]
 
         url = join_urls(
             self.pithos_path, self.user, self.container, self.object)
@@ -1291,6 +1298,8 @@ class ObjectCopy(PithosAPITest):
             # assert access the new object
             r = self.head(url)
             self.assertEqual(r.status_code, 200)
+            self.assertTrue('X-Object-Meta-Foo' in r)
+            self.assertEqual(r['X-Object-Meta-Foo'], 'bar')
             self.assertTrue('X-Object-Meta-Test' in r)
             self.assertEqual(r['X-Object-Meta-Test'], 'testcopy')
 
@@ -1344,6 +1353,8 @@ class ObjectCopy(PithosAPITest):
             # assert access the new object
             r = self.head(url)
             self.assertEqual(r.status_code, 200)
+            self.assertTrue('X-Object-Meta-Foo' in r)
+            self.assertEqual(r['X-Object-Meta-Foo'], 'bar')
             self.assertTrue('X-Object-Meta-Test' in r)
             self.assertEqual(r['X-Object-Meta-Test'], 'testcopy')
 
@@ -1582,11 +1593,11 @@ class ObjectMove(PithosAPITest):
                       HTTP_DESTINATION='/%s/%s' % (cname, self.object))
 
         # assert move success
-        url = join_urls(self.pithos_path, self.user, cname,
-                        self.object)
         self.assertEqual(r.status_code, 201)
 
         # assert access the new object
+        url = join_urls(self.pithos_path, self.user, cname,
+                        self.object)
         r = self.head(url)
         self.assertEqual(r.status_code, 200)
         self.assertTrue('X-Object-Meta-Test' in r)
@@ -2160,3 +2171,89 @@ class ObjectDelete(PithosAPITest):
         url = join_urls(self.pithos_path, self.user, self.container, other)
         r = self.head(url)
         self.assertEqual(r.status_code, 200)
+
+    def test_purge(self):
+        # upload object
+        block_size = pithos_settings.BACKEND_BLOCK_SIZE
+        oname, odata = self.upload_object(
+            self.container, length=random.randint(
+                block_size + 2, 2 * block_size))[:2]
+
+        url = join_urls(self.pithos_path, self.user, self.container, oname)
+        # update object several times
+        for i in range(5):
+            length = len(odata)
+            first_byte_pos = random.randint(1, block_size)
+            last_byte_pos = random.randint(block_size + 1, length - 1)
+            range_ = 'bytes %s-%s/%s' % (first_byte_pos, last_byte_pos, length)
+            kwargs = {'content_type': 'application/octet-stream',
+                      'HTTP_CONTENT_RANGE': range_}
+
+            partial = last_byte_pos - first_byte_pos + 1
+            data = get_random_data(partial)
+            r = self.post(url, data=data, **kwargs)
+            _time.sleep(1)
+
+        info = self.get_object_info(self.container, oname)
+        t = datetime.datetime.strptime(info['Last-Modified'],
+                                       DATE_FORMATS[2])
+        until = int(_time.mktime(t.timetuple()))
+
+        r = self.get('%s?version=list&format=json' % url)
+        self.assertEqual(r.status_code, 200)
+        l1 = json.loads(r.content)['versions']
+
+        r = self.delete('%s?until=%s' % (url, until))
+        self.assertEqual(r.status_code, 204)
+
+        r = self.get('%s?version=list&format=json' % url)
+        self.assertEqual(r.status_code, 200)
+        l2 = json.loads(r.content)['versions']
+        self.assertEqual(l2, l1[-1:])
+
+    def test_delete_none_versioning(self):
+        # create container
+        block_size = pithos_settings.BACKEND_BLOCK_SIZE
+        cname = self.create_container()[0]
+
+        # change versioning to none
+        url = join_urls(self.pithos_path, self.user, cname)
+        r = self.post(url, HTTP_X_CONTAINER_POLICY_VERSIONING='none')
+        self.assertEqual(r.status_code, 202)
+
+        # upload object
+        oname, odata, r = self.upload_object(cname)
+        self.assertTrue('X-Object-Version' in r)
+        version = r['X-Object-Version']
+
+        # update object several times
+        url = join_urls(url, oname)
+        for i in range(5):
+            length = len(odata)
+            first_byte_pos = random.randint(1, block_size)
+            last_byte_pos = random.randint(block_size + 1, length - 1)
+            range_ = 'bytes %s-%s/%s' % (first_byte_pos, last_byte_pos, length)
+            kwargs = {'content_type': 'application/octet-stream',
+                      'HTTP_CONTENT_RANGE': range_}
+
+            partial = last_byte_pos - first_byte_pos + 1
+            data = get_random_data(partial)
+            r = self.post(url, data=data, **kwargs)
+            self.assertEqual(r.status_code, 204)
+            self.assertTrue('X-Object-Version' in r)
+            version = r['X-Object-Version']
+            _time.sleep(1)
+
+        r = self.get('%s?version=list&format=json' % url)
+        self.assertEqual(r.status_code, 200)
+        l1 = json.loads(r.content)['versions']
+        self.assertEqual([i[0] for i in l1], [version])
+
+        r = self.delete(url)
+        self.assertEqual(r.status_code, 204)
+
+        r = self.get(url)
+        self.assertEqual(r.status_code, 404)
+
+        r = self.get('%s?version=list&format=json' % url)
+        self.assertEqual(r.status_code, 404)

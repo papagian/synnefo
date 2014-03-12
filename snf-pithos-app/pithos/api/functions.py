@@ -205,7 +205,8 @@ def account_list(request):
     if not limit:
         limit = settings.API_LIST_LIMIT
 
-    accounts = request.backend.list_accounts(request.user_uniq, marker, limit)
+    accounts = request.backend.list_accounts(request.user_uniq, marker=marker,
+                                             limit=limit)
 
     if request.serialization == 'text':
         if TRANSLATE_UUIDS:
@@ -376,7 +377,8 @@ def container_list(request, v_account):
     try:
         containers = request.backend.list_containers(
             request.user_uniq, v_account,
-            marker, limit, shared, until, public_granted)
+            marker=marker, limit=limit, shared=shared, until=until,
+            public=public_granted)
     except NotAllowedError:
         raise faults.Forbidden('Not allowed')
     except NameError:
@@ -676,9 +678,10 @@ def object_list(request, v_account, v_container):
         try:
             objects = request.backend.list_objects(
                 request.user_uniq, v_account,
-                v_container, prefix, delimiter, marker,
-                limit, virtual, 'pithos', keys, shared,
-                until, None, public_granted)
+                v_container, prefix, delimiter, marker=marker,
+                limit=limit, virtual=virtual, domain='pithos', keys=keys,
+                shared=shared, until=until, size_range=None,
+                public=public_granted)
         except NotAllowedError:
             raise faults.Forbidden('Not allowed')
         except ItemNotExists:
@@ -695,8 +698,9 @@ def object_list(request, v_account, v_container):
     try:
         objects = request.backend.list_object_meta(
             request.user_uniq, v_account, v_container, prefix, delimiter,
-            marker, limit, virtual, 'pithos', keys, shared, until, None,
-            public_granted)
+            marker=marker, limit=limit, virtual=virtual, domain='pithos',
+            keys=keys, shared=shared, until=until, size_range=None,
+            public=public_granted)
         object_permissions = {}
         object_public = {}
         if until is None:
@@ -707,9 +711,9 @@ def object_list(request, v_account, v_container):
                     request.user_uniq, v_account, v_container, prefix):
 
                 # filter out objects which are not under the container
-                if name != x[:name_idx]:
+                if v_account != x[0] or v_container != x[1]:
                     continue
-                objects_bulk.append(x[name_idx:])
+                objects_bulk.append(x[2])
 
             if len(objects_bulk) > 0:
                 object_permissions = \
@@ -927,8 +931,7 @@ def _object_read(request, v_account, v_container, v_object):
             for x in objects:
                 s, h = \
                     request.backend.get_object_hashmap(
-                        request.user_uniq, v_account, src_container, x[0],
-                        x[1])
+                        request.user_uniq, v_account, src_container, x[0])
                 sizes.append(s)
                 hashmaps.append(h)
         except NotAllowedError:

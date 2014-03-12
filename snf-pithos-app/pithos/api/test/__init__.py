@@ -546,13 +546,17 @@ class PithosAPITest(TestCase):
             self.assertEqual(r.status_code, 201)
         return oname, r
 
-    def list_objects(self, cname, prefix=None, user=None, verify_status=True):
+    def list_objects(self, cname, prefix=None, user=None, verify_status=True,
+                     **params):
         user = user or self.user
-        url = join_urls(self.pithos_path, user, cname)
-        path = '%s?format=json' % url
+        _url = join_urls(self.pithos_path, user, cname)
+        parts = list(urlsplit(_url))
+        params['format'] = 'json'
         if prefix is not None:
-            path = '%s&prefix=%s' % (path, prefix)
-        r = self.get(path, user=user)
+            params['prefix'] = prefix
+        parts[3] = urlencode(params)
+        url = urlunsplit(parts)
+        r = self.get(url, user=user)
         if verify_status:
             self.assertTrue(r.status_code in (200, 204))
         try:

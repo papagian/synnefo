@@ -54,7 +54,7 @@ class Command(SynnefoCommand):
                          "the Pithos quota, independently of their value.")
     )
 
-    def handle_noargs(self, **options):
+    def handle(self, *args, **options):
         write = self.stdout.write
         try:
             backend.pre_exec()
@@ -63,7 +63,7 @@ class Command(SynnefoCommand):
 
             # Get holding from Pithos DB
             db_usage = backend.node.node_account_usage(userid, project)
-            db_project_usage = backend.node.node_project_usage(project)
+            db_project_usage = db_usage.get(project, {})
 
             users = set(db_usage.keys())
             if userid and userid not in users:
@@ -84,6 +84,7 @@ class Command(SynnefoCommand):
             except NotFound:
                 write("Project '%s' does not exist in Quotaholder!\n" %
                       project)
+                return
 
             unsynced_users, users_pending, users_unknown =\
                 reconcile.check_users(self.stderr, RESOURCES,
