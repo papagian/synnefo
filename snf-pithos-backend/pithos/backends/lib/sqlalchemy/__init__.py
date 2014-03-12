@@ -32,14 +32,14 @@
 # or implied, of GRNET S.A.
 
 from dbwrapper import DBWrapper
-from node import (Node, ROOTNODE, SERIAL, NODE, HASH, SIZE, TYPE, MTIME, MUSER,
-                  UUID, CHECKSUM, CLUSTER, MATCH_PREFIX, MATCH_EXACT)
+from node import (Node, ACCOUNT, CONTAINER, OBJ, HASH, SIZE, TYPE,
+                  MTIME, MUSER, UUID, CHECKSUM, CLUSTER, MATCH_PREFIX,
+                  MATCH_EXACT)
 from permissions import Permissions, READ, WRITE
-from config import Config
 from quotaholder_serials import QuotaholderSerial
 
 __all__ = ["DBWrapper",
-           "Node", "ROOTNODE", "NODE", "SERIAL", "HASH", "SIZE", "TYPE",
+           "Node", "ACCOUNT", "CONTAINER", "OBJ",
+           "HASH", "SIZE", "TYPE",
            "MTIME", "MUSER", "UUID", "CHECKSUM", "CLUSTER", "MATCH_PREFIX",
-           "MATCH_EXACT", "Permissions", "READ", "WRITE", "Config",
-           "QuotaholderSerial"]
+           "MATCH_EXACT", "Permissions", "READ", "WRITE", "QuotaholderSerial"]

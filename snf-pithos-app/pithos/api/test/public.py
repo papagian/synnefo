@@ -64,7 +64,7 @@ class TestPublic(PithosAPITest):
 
         self.assertEqual(r.content, odata)
 
-        # assert other users cannot access the object using the priavate path
+        # assert other users cannot access the object using the private path
         url = join_urls(self.pithos_path, self.user, cname, oname)
         r = self.head(url, user='user2')
         self.assertEqual(r.status_code, 403)
@@ -216,7 +216,7 @@ class TestPublic(PithosAPITest):
         _time.sleep(1)
         t = datetime.datetime.utcnow()
         now = int(_time.mktime(t.timetuple()))
-        r = self.delete('%s?intil=%d' % (url, now))
+        r = self.delete('%s?until=%d' % (url, now))
         self.assertEqual(r.status_code, 204)
         r = self.get(url)
         self.assertEqual(r.status_code, 404)

@@ -178,9 +178,7 @@ class ObjectGetView(PithosAPITest):
         c = self.cname
         o = self.oname
 
-        meta = {'HTTP_X_OBJECT_META_QUALITY': 'AAA'}
-        r = self.post(self.api_url, content_type='', **meta)
-        self.assertEqual(r.status_code, 202)
+        self.upload_object(c, o, quality='aaa')
 
         r = self.view('%s?version=list&format=json' % self.view_url)
         self.assertEqual(r.status_code, 200)
@@ -193,16 +191,17 @@ class ObjectGetView(PithosAPITest):
         r = self.post(self.api_url, content_type='', **meta)
         self.assertEqual(r.status_code, 202)
 
-        # assert a newly created version has been created
+        # assert no new version has been created
         r = self.view('%s?version=list&format=json' % self.view_url)
         self.assertEqual(r.status_code, 200)
         l2 = json.loads(r.content)['versions']
-        self.assertEqual(len(l2), len(l1) + 1)
-        self.assertEqual(l2[:-1], l1)
+        self.assertEqual(len(l2), len(l1))
 
         vserial, _ = l2[-2]
+        self.assertEqual(self.get_object_meta(c, o, version=vserial), {})
+        vserial, _ = l2[-1]
         self.assertEqual(self.get_object_meta(c, o, version=vserial),
-                         {'Quality': 'AAA'})
+                         {'Quality': 'AB', 'Stock': 'True'})
 
         # update data
         self.append_object_data(c, o)

@@ -243,9 +243,10 @@ class ManageAccounts():
 
         if public:
             # set destination object public
-            fullpath = '/'.join([dest_account, dest_container, dest_name])
             self.backend.permissions.public_set(
-                fullpath,
+                dest_account,
+                dest_container,
+                dest_name,
                 self.backend.public_url_security,
                 self.backend.public_url_alphabet
             )

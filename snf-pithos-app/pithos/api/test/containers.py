@@ -392,7 +392,7 @@ class ContainerGet(PithosAPITest):
         # create child object
         descendant = strnextling(public1)
         self.upload_object(cname, descendant)
-        # request public and assert child obejct is not listed
+        # request public and assert child object is not listed
         r = self.get('%s?public=' % url)
         objects = r.content.split('\n')
         if '' in objects:
@@ -594,6 +594,13 @@ class ContainerGet(PithosAPITest):
             end = end if len(onames) >= end else len(onames)
             self.assertEqual(objects, onames[start:end])
 
+        m = 'p'
+        r = self.get('%s?limit=%s&marker=%s' % (url, limit, m))
+        objects = r.content.split('\n')
+        if '' in objects:
+            objects.remove('')
+        self.assertEqual(objects, [o for o in o_names[:8] if o > m])
+
     @pithos_test_settings(API_LIST_LIMIT=10)
     def test_list_limit_exceeds(self):
         self.create_container('container')
@@ -793,21 +800,6 @@ class ContainerGet(PithosAPITest):
         objects = self.objects[cname].keys()
         objects.append(oname)
         for t in t1_formats:
-            r = self.get(url, HTTP_IF_MODIFIED_SINCE=t)
-            self.assertEqual(r.status_code, 200)
-            self.assertEqual(r.content.split('\n')[:-1], sorted(objects))
-
-        container_info = self.get_container_info(cname)
-        last_modified = container_info['Last-Modified']
-        t2 = datetime.datetime.strptime(last_modified, DATE_FORMATS[-1])
-        t2_formats = map(t2.strftime, DATE_FORMATS)
-
-        # modify account: update account meta
-        _time.sleep(1)
-        self.update_container_meta(cname, {'foo': 'bar'})
-
-        # Check modified
-        for t in t2_formats:
             r = self.get(url, HTTP_IF_MODIFIED_SINCE=t)
             self.assertEqual(r.status_code, 200)
             self.assertEqual(r.content.split('\n')[:-1], sorted(objects))

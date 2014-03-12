@@ -1,4 +1,4 @@
-# Copyright 2011-2012 GRNET S.A. All rights reserved.
+# Copyright 2011-2014 GRNET S.A. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or
 # without modification, are permitted provided that the following
@@ -32,7 +32,7 @@
 # or implied, of GRNET S.A.
 
 from sqlalchemy.sql import select, literal, or_, and_
-from sqlalchemy.sql.expression import join, union
+from sqlalchemy.sql.expression import join, union, null
 
 from xfeatures import XFeatures
 from groups import Groups
@@ -41,6 +41,8 @@ from node import Node
 from collections import defaultdict
 
 from dbworker import ESCAPE_CHAR
+
+import collections
 
 
 READ = 0
@@ -55,35 +57,27 @@ class Permissions(XFeatures, Groups, Public, Node):
         Public.__init__(self, **params)
         Node.__init__(self, **params)
 
-    def access_grant(self, path, access, members=()):
+    def access_grant(self, account, container, obj, access, members=()):
         """Grant members with access to path.
            Members can also be '*' (all),
            or some group specified as 'owner:group'."""
 
-        if not members:
-            return
-        feature = self.xfeature_create(path)
-        self.feature_setmany(feature, access, members)
+        self.feature_setmany(account, container, obj, access, members)
 
-    def access_set(self, path, permissions):
+    def access_set(self, account, container, obj, permissions):
         """Set permissions for path. The permissions dict
            maps 'read', 'write' keys to member lists."""
 
         r = permissions.get('read', [])
         w = permissions.get('write', [])
-        if not r and not w:
-            self.xfeature_destroy(path)
-            return
-        feature = self.xfeature_create(path)
-        self.feature_clear(feature, READ)
-        self.feature_clear(feature, WRITE)
-        if r:
-            self.feature_setmany(feature, READ, r)
-        if w:
-            self.feature_setmany(feature, WRITE, w)
+        self.feature_clear(account, container, obj, READ)
+        self.feature_clear(account, container, obj, WRITE)
+        self.feature_setmany(account, container, obj, READ, r)
+        self.feature_setmany(account, container, obj, WRITE, w)
 
     def access_get_for_bulk(self, perms):
         """Get permissions for path."""
+
         allowed = None
         d = defaultdict(list)
         for value, feature_id, key in perms:
@@ -99,13 +93,10 @@ class Permissions(XFeatures, Groups, Public, Node):
             del(permissions[WRITE])
         return (permissions, allowed)
 
-    def access_get(self, path):
+    def access_get(self, account, container, obj):
         """Get permissions for path."""
 
-        feature = self.xfeature_get(path)
-        if not feature:
-            return {}
-        permissions = self.feature_dict(feature)
+        permissions = self.feature_dict(account, container, obj)
         if READ in permissions:
             permissions['read'] = permissions[READ]
             del(permissions[READ])
@@ -114,11 +105,8 @@ class Permissions(XFeatures, Groups, Public, Node):
             del(permissions[WRITE])
         return permissions
 
-    def access_members(self, path):
-        feature = self.xfeature_get(path)
-        if not feature:
-            return []
-        permissions = self.feature_dict(feature)
+    def access_members(self, account, container, obj):
+        permissions = self.feature_dict(account, container, obj)
         members = set()
         members.update(permissions.get(READ, []))
         members.update(permissions.get(WRITE, []))
@@ -131,25 +119,22 @@ class Permissions(XFeatures, Groups, Public, Node):
             members.update(self.group_members(user, group))
         return list(members)
 
-    def access_clear(self, path):
+    def access_clear(self, account, container, obj):
         """Revoke access to path (both permissions and public)."""
 
-        self.xfeature_destroy(path)
-        self.public_unset(path)
+        self.xfeature_destroy(account, container, obj)
+        self.public_unset(account, container, obj)
 
-    def access_clear_bulk(self, paths):
+    def access_clear_bulk(self, t):
         """Revoke access to path (both permissions and public)."""
 
-        self.xfeature_destroy_bulk(paths)
-        self.public_unset_bulk(paths)
+        self.xfeature_destroy_bulk(t)
+        self.public_unset_bulk(t)
 
-    def access_check(self, path, access, member):
+    def access_check(self, account, container, obj, access, member):
         """Return true if the member has this access to the path."""
 
-        feature = self.xfeature_get(path)
-        if not feature:
-            return False
-        members = self.feature_get(feature, access)
+        members = self.feature_get(account, container, obj, access)
         if member in members or '*' in members:
             return True
         for owner, group in self.group_parents(member):
@@ -158,20 +143,23 @@ class Permissions(XFeatures, Groups, Public, Node):
         return False
 
     def access_check_bulk(self, paths, member):
-        rows = None
-        xfeatures_xfeaturevals = self.xfeaturevals.join(self.xfeatures,
-                onclause=and_(self.xfeatures.c.feature_id ==
-                    self.xfeaturevals.c.feature_id, self.xfeatures.c.path.in_(paths)))
-        s = select([self.xfeatures.c.path,
-                    self.xfeaturevals.c.value,
-                    self.xfeaturevals.c.feature_id,
-                    self.xfeaturevals.c.key], from_obj=[xfeatures_xfeaturevals])
+        s = select([self.xfeatures.c.account,
+                    self.xfeatures.c.container,
+                    self.xfeatures.c.obj,
+                    self.xfeatures.c.value,
+                    self.xfeatures.c.feature_id,
+                    self.xfeatures.c.key],
+                   or_(*[and_(self.xfeatures.c.account == account,
+                              self.xfeatures.c.container == container,
+                              self.xfeatures.c.obj == obj) for (
+                       account, container, obj) in paths]))
         r = self.conn.execute(s)
         rows = r.fetchall()
         r.close()
         if rows:
             access_check_paths = {}
-            for path, value, feature_id, key in rows:
+            for account, container, obj, value, feature_id, key in rows:
+                path = (account, container, obj)
                 try:
                     access_check_paths[path].append((value, feature_id, key))
                 except KeyError:
@@ -180,53 +168,53 @@ class Permissions(XFeatures, Groups, Public, Node):
             return access_check_paths
         return None
 
-    def access_inherit(self, path):
+    def access_inherit(self, account, container='', obj=''):
         """Return the paths influencing the access for path."""
 
-#         r = self.xfeature_inherit(path)
-#         if not r:
-#             return []
-#         # Compute valid.
-#         return [x[0] for x in r if x[0] in valid]
-
         # Only keep path components.
+        container_path = '/'.join([account, container])
+        idx = len(container_path) + 1
+        path = '/'.join([account, container, obj])
         parts = path.rstrip('/').split('/')
-        valid = []
+        valid = set()
         for i in range(1, len(parts)):
             subp = '/'.join(parts[:i + 1])
-            valid.append(subp)
+            valid.add(subp[idx:])
             if subp != path:
-                valid.append(subp + '/')
-        return [x for x in valid if self.xfeature_get(x)]
+                valid.add(subp[idx:] + '/')
+        valid = self.xfeature_get_bulk(account, container, valid)
+        return [(x.account, x.container, x.obj) for x in valid]
 
-    def access_inherit_bulk(self, paths):
-        """Return the paths influencing the access for path."""
+    def access_inherit_bulk(self, account, container, paths):
+        """Return the paths influencing the access for specific paths."""
 
         # Only keep path components.
-        valid = []
-        for path in paths:
+        container_path = '/'.join([account, container])
+        idx = len(container_path) + 1
+        valid = set()
+        for p in paths:
+            path = '/'.join([container_path, p])
             parts = path.rstrip('/').split('/')
             for i in range(1, len(parts)):
                 subp = '/'.join(parts[:i + 1])
-                valid.append(subp)
+                valid.add(subp[idx:])
                 if subp != path:
-                    valid.append(subp + '/')
-        valid = self.xfeature_get_bulk(valid)
-        return [x[1] for x in valid]
+                    valid.add(subp[idx:] + '/')
+        valid = self.xfeature_get_bulk(account, container, valid)
+        return [(x.account, x.container, x.obj) for x in valid]
 
-    def access_list_paths(self, member, prefix=None, include_owned=False,
+    def access_list_paths(self, member, account='', container='',
+                          prefix='', include_owned=False,
                           include_containers=True):
         """Return the list of paths granted to member.
 
         Keyword arguments:
-        prefix -- return only paths starting with prefix (default None)
+        prefix -- return only objects starting with prefix (default None)
         include_owned -- return also paths owned by member (default False)
         include_containers -- return also container paths owned by member
                               (default True)
 
         """
-
-        xfeatures_xfeaturevals = self.xfeatures.join(self.xfeaturevals)
 
         selectable = (self.groups.c.owner + ':' + self.groups.c.name)
         member_groups = select([selectable.label('value')],
@@ -236,41 +224,80 @@ class Permissions(XFeatures, Groups, Public, Node):
         any = select([literal('*').label('value')])
 
         u = union(member_groups, members, any).alias()
-        inner_join = join(xfeatures_xfeaturevals, u,
-                          self.xfeaturevals.c.value == u.c.value)
-        s = select([self.xfeatures.c.path], from_obj=[inner_join]).distinct()
-        if prefix:
-            like = lambda p: self.xfeatures.c.path.like(
-                self.escape_like(p) + '%', escape=ESCAPE_CHAR)
-            s = s.where(or_(*map(like,
-                                 self.access_inherit(prefix) or [prefix])))
+        inner_join = join(self.xfeatures, u,
+                          self.xfeatures.c.value == u.c.value)
+        s = select([self.xfeatures.c.account,
+                    self.xfeatures.c.container,
+                    self.xfeatures.c.obj], from_obj=[inner_join]).distinct()
+        if account:
+            if container and prefix:
+                like = lambda p: and_(
+                    self.xfeatures.c.account == p[0],
+                    self.xfeatures.c.container == p[1],
+                    self.xfeatures.c.obj.like(self.escape_like(p[2]) + '%',
+                                              escape=ESCAPE_CHAR))
+            elif container:
+                like = lambda p: and_(
+                    self.xfeatures.c.account == p[0],
+                    self.xfeatures.c.container == p[1],
+                    self.xfeatures.c.obj.like('%', escape=ESCAPE_CHAR))
+            else:
+                like = lambda p: and_(
+                    self.xfeatures.c.account == p[0],
+                    self.xfeatures.c.container.like('%', escape=ESCAPE_CHAR),
+                    self.xfeatures.c.obj.like('%', escape=ESCAPE_CHAR))
+            t = (account, container, prefix)
+            s = s.where(or_(*map(like, self.access_inherit(*t) or (t,))))
         r = self.conn.execute(s)
-        l = [row[0] for row in r.fetchall()]
+        l = r.fetchall()
         r.close()
 
         if include_owned:
-            container_nodes = select(
-                [self.nodes.c.node],
-                self.nodes.c.parent == self.node_lookup(member))
-            condition = self.nodes.c.parent.in_(container_nodes)
+            s = select([self.nodes.c.account,
+                        self.nodes.c.container,
+                        self.nodes.c.obj])
+            condition = and_(self.nodes.c.account == member,
+                             self.nodes.c.container != null(),
+                             self.nodes.c.obj != null())
             if include_containers:
                 condition = or_(condition,
-                                self.nodes.c.node.in_(container_nodes))
-            s = select([self.nodes.c.path], condition)
+                                and_(self.nodes.c.account == member,
+                                     self.nodes.c.container != null(),
+                                     self.nodes.c.obj == null()))
+            s = s.where(condition)
             r = self.conn.execute(s)
-            l += [row[0] for row in r.fetchall() if row[0] not in l]
+            l += [row for row in r.fetchall() if row not in l]
             r.close()
         return l
 
-    def access_list_shared(self, prefix=''):
+    def access_list_shared(self, account, container='', prefix=''):
         """Return the list of shared paths."""
 
-        s = select([self.xfeatures.c.path])
-        like = lambda p: self.xfeatures.c.path.like(
-            self.escape_like(p) + '%', escape=ESCAPE_CHAR)
-        s = s.where(or_(*map(like, self.access_inherit(prefix) or [prefix])))
-        s = s.order_by(self.xfeatures.c.path.asc())
+        s = select([self.xfeatures.c.account,
+                    self.xfeatures.c.container,
+                    self.xfeatures.c.obj]).distinct()
+        if account and container and prefix:
+            like = lambda p: and_(
+                self.xfeatures.c.account == p[0],
+                self.xfeatures.c.container == p[1],
+                self.xfeatures.c.obj.like(self.escape_like(p[2]) + '%',
+                                          escape=ESCAPE_CHAR))
+        elif container:
+            like = lambda p: and_(
+                self.xfeatures.c.account == p[0],
+                self.xfeatures.c.container == p[1],
+                self.xfeatures.c.obj.like('%', escape=ESCAPE_CHAR))
+        else:
+            like = lambda p: and_(
+                self.xfeatures.c.account == p[0],
+                self.xfeatures.c.container.like('%', escape=ESCAPE_CHAR),
+                self.xfeatures.c.obj.like('%', escape=ESCAPE_CHAR))
+        t = (account, container, prefix)
+        s = s.where(or_(*map(like, self.access_inherit(*t) or (t,))))
+        s = s.order_by(self.xfeatures.c.account.asc(),
+                       self.xfeatures.c.container.asc(),
+                       self.xfeatures.c.obj.asc())
         r = self.conn.execute(s)
-        l = [row[0] for row in r.fetchall()]
+        l = [row[:] for row in r.fetchall()]
         r.close()
         return l

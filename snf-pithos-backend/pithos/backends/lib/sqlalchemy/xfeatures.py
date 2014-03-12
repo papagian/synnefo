@@ -1,4 +1,4 @@
-# Copyright 2011-2012 GRNET S.A. All rights reserved.
+# Copyright 2011-2014 GRNET S.A. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or
 # without modification, are permitted provided that the following
@@ -32,8 +32,8 @@
 # or implied, of GRNET S.A.
 
 from collections import defaultdict
-from sqlalchemy import Table, Column, String, Integer, MetaData, ForeignKey
-from sqlalchemy.sql import select, and_
+from sqlalchemy import Table, Column, String, Integer, MetaData
+from sqlalchemy.sql import select, and_, or_
 from sqlalchemy.schema import Index
 from sqlalchemy.exc import NoSuchTableError
 
@@ -44,20 +44,18 @@ def create_tables(engine):
     metadata = MetaData()
     columns = []
     columns.append(Column('feature_id', Integer, primary_key=True))
-    columns.append(Column('path', String(2048)))
-    xfeatures = Table('xfeatures', metadata, *columns, mysql_engine='InnoDB')
-    # place an index on path
-    Index('idx_features_path', xfeatures.c.path, unique=True)
-
-    columns = []
-    columns.append(Column('feature_id', Integer,
-                          ForeignKey('xfeatures.feature_id',
-                                     ondelete='CASCADE'),
-                          primary_key=True))
+    columns.append(Column('account', String(256), nullable=False, default=''))
+    columns.append(Column('container', String(256), nullable=False,
+                          default=''))
+    columns.append(Column('obj', String(1024), nullable=False, default=''))
     columns.append(Column('key', Integer, primary_key=True,
                           autoincrement=False))
     columns.append(Column('value', String(256), primary_key=True))
-    Table('xfeaturevals', metadata, *columns, mysql_engine='InnoDB')
+    xfeatures = Table('xfeatures', metadata, *columns, mysql_engine='InnoDB')
+    # place an index on path
+    Index('idx_xfeatures_path_2',
+          xfeatures.c.account, xfeatures.c.container, xfeatures.c.obj,
+          xfeatures.c.key, xfeatures.c.value, unique=True)
 
     metadata.create_all(engine)
     return metadata.sorted_tables
@@ -78,25 +76,13 @@ class XFeatures(DBWorker):
             tables = create_tables(self.engine)
             map(lambda t: self.__setattr__(t.name, t), tables)
 
-#     def xfeature_inherit(self, path):
-#         """Return the (path, feature) inherited by the path, or None."""
-#
-#         s = select([self.xfeatures.c.path, self.xfeatures.c.feature_id])
-#         s = s.where(self.xfeatures.c.path <= path)
-#         s = s.where(self.xfeatures.c.path.like(
-#           self.escape_like(path) + '%', escape='\\'))  # XXX: Escape like...
-#         s = s.order_by(desc(self.xfeatures.c.path))
-#         r = self.conn.execute(s)
-#         l = r.fetchall()
-#         r.close()
-#         return l
-
-    def xfeature_get(self, path):
+    def xfeature_get(self, account, container, obj):
         """Return feature for path."""
 
         s = select([self.xfeatures.c.feature_id])
-        s = s.where(self.xfeatures.c.path == path)
-        s = s.order_by(self.xfeatures.c.path)
+        s = s.where(self.xfeatures.c.account == account)
+        s = s.where(self.xfeatures.c.container == container)
+        s = s.where(self.xfeatures.c.obj == obj)
         r = self.conn.execute(s)
         row = r.fetchone()
         r.close()
@@ -104,54 +90,72 @@ class XFeatures(DBWorker):
             return row[0]
         return None
 
-    def xfeature_get_bulk(self, paths):
+    def xfeature_get_bulk(self, account, container, paths):
         """Return features for paths."""
-        paths = list(set(paths))
-        s = select([self.xfeatures.c.feature_id, self.xfeatures.c.path])
-        s = s.where(self.xfeatures.c.path.in_(paths))
-        s = s.order_by(self.xfeatures.c.path)
-        r = self.conn.execute(s)
-        row = r.fetchall()
-        r.close()
-        if row:
-            return row
-        return None
 
-    def xfeature_create(self, path):
+        if not paths:
+            return ()
+
+        s = select([self.xfeatures.c.feature_id,
+                    self.xfeatures.c.account,
+                    self.xfeatures.c.container,
+                    self.xfeatures.c.obj]).distinct()
+        s = s.where(and_(self.xfeatures.c.account == account,
+                         self.xfeatures.c.container == container,
+                         self.xfeatures.c.obj.in_(paths)))
+        s = s.order_by(self.xfeatures.c.account,
+                       self.xfeatures.c.container,
+                       self.xfeatures.c.obj)
+        r = self.conn.execute(s)
+        rows = r.fetchall()
+        r.close()
+        return rows
+
+    def xfeature_create(self, account, container, obj):
         """Create and return a feature for path.
            If the path has a feature, return it.
         """
 
-        feature = self.xfeature_get(path)
+        feature = self.xfeature_get(account, container, obj)
         if feature is not None:
             return feature
         s = self.xfeatures.insert()
-        r = self.conn.execute(s, path=path)
+        r = self.conn.execute(s, account=account, container=container, obj=obj)
         inserted_primary_key = r.inserted_primary_key[0]
         r.close()
         return inserted_primary_key
 
-    def xfeature_destroy(self, path):
+    def xfeature_destroy(self, account, container, obj):
         """Destroy a feature and all its key, value pairs."""
 
-        s = self.xfeatures.delete().where(self.xfeatures.c.path == path)
+        s = self.xfeatures.delete().where(and_(
+            self.xfeatures.c.account == account,
+            self.xfeatures.c.container == container,
+            self.xfeatures.c.obj == obj))
         r = self.conn.execute(s)
         r.close()
 
-    def xfeature_destroy_bulk(self, paths):
+    def xfeature_destroy_bulk(self, t):
         """Destroy features and all their key, value pairs."""
 
-        if not paths:
+        if not t:
             return
-        s = self.xfeatures.delete().where(self.xfeatures.c.path.in_(paths))
+        s = self.xfeatures.delete().where(
+            or_(*[and_(self.xfeatures.c.account == account,
+                       self.xfeatures.c.container == container,
+                       self.xfeatures.c.obj == obj) for (account,
+                                                         container,
+                                                         obj) in t]))
         r = self.conn.execute(s)
         r.close()
 
-    def feature_dict(self, feature):
+    def feature_dict(self, account, container, obj):
         """Return a dict mapping keys to list of values for feature."""
 
-        s = select([self.xfeaturevals.c.key, self.xfeaturevals.c.value])
-        s = s.where(self.xfeaturevals.c.feature_id == feature)
+        s = select([self.xfeatures.c.key, self.xfeatures.c.value])
+        s = s.where(and_(self.xfeatures.c.account == account,
+                         self.xfeatures.c.container == container,
+                         self.xfeatures.c.obj == obj))
         r = self.conn.execute(s)
         d = defaultdict(list)
         for key, value in r.fetchall():
@@ -159,65 +163,81 @@ class XFeatures(DBWorker):
         r.close()
         return d
 
-    def feature_set(self, feature, key, value):
+    def feature_set(self, account, container, obj, key, value):
         """Associate a key, value pair with a feature."""
 
-        s = self.xfeaturevals.select()
-        s = s.where(self.xfeaturevals.c.feature_id == feature)
-        s = s.where(self.xfeaturevals.c.key == key)
-        s = s.where(self.xfeaturevals.c.value == value)
+        # TODO: insert if not exists
+        s = self.xfeatures.select()
+        s = s.where(self.xfeatures.c.account == account)
+        s = s.where(self.xfeatures.c.container == container)
+        s = s.where(self.xfeatures.c.obj == obj)
+        s = s.where(self.xfeatures.c.key == key)
+        s = s.where(self.xfeatures.c.value == value)
         r = self.conn.execute(s)
-        xfeaturevals = r.fetchall()
+        xfeatures = r.fetchall()
         r.close()
-        if len(xfeaturevals) == 0:
-            s = self.xfeaturevals.insert()
-            r = self.conn.execute(s, feature_id=feature, key=key, value=value)
+        if len(xfeatures) == 0:
+            s = self.xfeatures.insert()
+            r = self.conn.execute(s, account=account, container=container,
+                                  obj=obj, key=key, value=value)
             r.close()
 
-    def feature_setmany(self, feature, key, values):
+    def feature_setmany(self, account, container, obj, key, values):
         """Associate the given key, and values with a feature."""
 
-        #TODO: more efficient way to do it
-        for v in values:
-            self.feature_set(feature, key, v)
+        if not values:
+            return
+        ins = self.xfeatures.insert()
+        self.conn.execute(ins, [{'account': account,
+                                 'container':  container,
+                                 'obj': obj,
+                                 'key': key,
+                                 'value': v} for v in values])
 
-    def feature_unset(self, feature, key, value):
+    def feature_unset(self, account, container, obj, key, value):
         """Disassociate a key, value pair from a feature."""
 
-        s = self.xfeaturevals.delete()
-        s = s.where(and_(self.xfeaturevals.c.feature_id == feature,
-                         self.xfeaturevals.c.key == key,
-                         self.xfeaturevals.c.value == value))
+        s = self.xfeatures.delete()
+        s = s.where(and_(self.xfeatures.c.account == account,
+                         self.xfeatures.c.container == container,
+                         self.xfeatures.c.obj == obj,
+                         self.xfeatures.c.key == key,
+                         self.xfeatures.c.value == value))
         r = self.conn.execute(s)
         r.close()
 
-    def feature_unsetmany(self, feature, key, values):
+    def feature_unsetmany(self, account, container, obj, key, values):
         """Disassociate the key for the values given, from a feature."""
 
-        for v in values:
-            conditional = and_(self.xfeaturevals.c.feature_id == feature,
-                               self.xfeaturevals.c.key == key,
-                               self.xfeaturevals.c.value == v)
-            s = self.xfeaturevals.delete().where(conditional)
-            r = self.conn.execute(s)
-            r.close()
+        conditional = or_(*[and_(self.xfeatures.c.account == account,
+                                 self.xfeatures.c.container == container,
+                                 self.xfeatures.c.obj == obj,
+                                 self.xfeatures.c.key == key,
+                                 self.xfeatures.c.value == v) for v in values])
+        s = self.xfeatures.delete().where(conditional)
+        r = self.conn.execute(s)
+        r.close()
 
-    def feature_get(self, feature, key):
+    def feature_get(self, account, container, obj, key):
         """Return the list of values for a key of a feature."""
 
-        s = select([self.xfeaturevals.c.value])
-        s = s.where(and_(self.xfeaturevals.c.feature_id == feature,
-                         self.xfeaturevals.c.key == key))
+        s = select([self.xfeatures.c.value])
+        s = s.where(and_(self.xfeatures.c.account == account,
+                         self.xfeatures.c.container == container,
+                         self.xfeatures.c.obj == obj,
+                         self.xfeatures.c.key == key))
         r = self.conn.execute(s)
         l = [row[0] for row in r.fetchall()]
         r.close()
         return l
 
-    def feature_clear(self, feature, key):
+    def feature_clear(self, account, container, obj, key):
         """Delete all key, value pairs for a key of a feature."""
 
-        s = self.xfeaturevals.delete()
-        s = s.where(and_(self.xfeaturevals.c.feature_id == feature,
-                         self.xfeaturevals.c.key == key))
+        s = self.xfeatures.delete()
+        s = s.where(and_(self.xfeatures.c.account == account,
+                         self.xfeatures.c.container == container,
+                         self.xfeatures.c.obj == obj,
+                         self.xfeatures.c.key == key))
         r = self.conn.execute(s)
         r.close()

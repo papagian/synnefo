@@ -44,6 +44,7 @@ import datetime
 
 import django.utils.simplejson as json
 
+
 class AccountHead(PithosAPITest):
     def test_get_account_meta(self):
         cnames = ['apples', 'bananas', 'kiwis', 'oranges', 'pears']
@@ -63,6 +64,12 @@ class AccountHead(PithosAPITest):
         account_info = self.get_account_info()
         self.assertTrue('X-Account-Meta-Foo' in account_info)
         self.assertEqual(account_info['X-Account-Meta-Foo'], 'bar')
+
+        # set account meta
+        self.update_account_meta({'foo': 'foo2'})
+        account_info = self.get_account_info()
+        self.assertTrue('X-Account-Meta-Foo' in account_info)
+        self.assertEqual(account_info['X-Account-Meta-Foo'], 'foo2')
 
         # list containers
         containers = self.list_containers()
@@ -121,6 +128,7 @@ class AccountHead(PithosAPITest):
 
         self.assertTrue('X-Account-Meta-Quality' in account_info)
         self.assertTrue('X-Account-Meta-Foo' in account_info)
+        self.assertEqual(int(account_info['X-Account-Container-Count']), 5)
 
         account_info = self.get_account_info(until=until)
         self.assertTrue('X-Account-Meta-Quality' not in account_info)
@@ -169,7 +177,7 @@ class AccountGet(PithosAPITest):
         _time.sleep(2)
 
         self.create_container()
-        
+
         url = join_urls(self.pithos_path, self.user)
         r = self.get('%s?until=%s' % (url, until))
         self.assertEqual(r.status_code, 200)
@@ -179,7 +187,6 @@ class AccountGet(PithosAPITest):
         self.assertEqual(containers,
                          ['apples', 'bananas', 'kiwis', 'oranges', 'pears'])
 
-        
         r = self.get('%s?until=%s&format=json' % (url, until))
         self.assertEqual(r.status_code, 200)
         try:
@@ -187,7 +194,7 @@ class AccountGet(PithosAPITest):
         except:
             self.fail('json format expected')
         self.assertEqual([c['name'] for c in containers],
-                         ['apples', 'bananas', 'kiwis', 'oranges', 'pears']) 
+                         ['apples', 'bananas', 'kiwis', 'oranges', 'pears'])
 
     def test_list_shared(self):
         # upload and publish object
@@ -247,6 +254,10 @@ class AccountGet(PithosAPITest):
                                           marker='oranges')
         self.assertEquals(containers, ['pears'])
 
+        containers = self.list_containers(format=None, limit=2,
+                                          marker='o')
+        self.assertEquals(containers, ['oranges', 'pears'])
+
     def test_list_json_with_marker(self):
         containers = self.list_containers(format='json', limit=2,
                                           marker='bananas')
@@ -303,9 +314,9 @@ class AccountGet(PithosAPITest):
         t2 = datetime.datetime.strptime(last_modified, DATE_FORMATS[-1])
         t2_formats = map(t2.strftime, DATE_FORMATS)
 
-        # modify account: update account meta
+        # modify account: create another container
         _time.sleep(1)
-        self.update_account_meta({'foo': 'bar'})
+        cname = self.create_container()[0]
 
         # Check modified
         for t in t2_formats:
@@ -313,7 +324,8 @@ class AccountGet(PithosAPITest):
             self.assertEqual(r.status_code, 200)
             self.assertEqual(
                 r.content.split('\n')[:-1],
-                ['apples', 'bananas', 'c1', 'kiwis', 'oranges', 'pears'])
+                sorted(['apples', 'bananas', 'c1', 'kiwis', 'oranges', 'pears',
+                        cname]))
 
     def test_if_modified_since_invalid_date(self):
         url = join_urls(self.pithos_path, self.user)

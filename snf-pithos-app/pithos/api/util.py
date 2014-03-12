@@ -69,7 +69,6 @@ from pithos.api.settings import (BACKEND_DB_MODULE, BACKEND_DB_CONNECTION,
                                  BASE_HOST, UPDATE_MD5, VIEW_PREFIX,
                                  OAUTH2_CLIENT_CREDENTIALS, UNSAFE_DOMAIN)
 
-from pithos.api.resources import resources
 from pithos.backends import connect_backend
 from pithos.backends.base import (NotAllowedError, QuotaError, ItemNotExists,
                                   VersionNotExists)
@@ -266,17 +265,13 @@ def update_manifest_meta(request, v_account, meta):
         try:
             src_container, src_name = split_container_object_string(
                 '/' + meta['X-Object-Manifest'])
-            objects = request.backend.list_objects(
+            objects = request.backend.list_object_meta(
                 request.user_uniq, v_account,
                 src_container, prefix=src_name, virtual=False)
-            for x in objects:
-                src_meta = request.backend.get_object_meta(
-                    request.user_uniq, v_account, src_container, x[0],
-                    'pithos', x[1])
-                etag += (src_meta['hash'] if not UPDATE_MD5 else
-                         src_meta['checksum'])
-                bytes += src_meta['bytes']
-        except:
+            etag = ''.join([o['hash'] if not UPDATE_MD5 else o['checksum'] for
+                            o in objects])
+            bytes = sum([o['bytes'] for o in objects])
+        except (ItemNotExists, NotAllowedError):
             # Ignore errors.
             return
         meta['bytes'] = bytes
